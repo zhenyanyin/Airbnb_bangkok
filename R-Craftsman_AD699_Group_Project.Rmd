@@ -1,0 +1,1098 @@
+---
+title: "R-Craftsman_AD699_Group _Project"
+
+---
+```{r}
+library(gutenbergr)
+library(tidytext)
+library(wordcloud)
+library(readr)
+library(tm)
+
+library(tidyverse)
+library(dplyr)
+library(ggplot2)
+library(caTools)
+library(forecast)
+library(car)
+library(rpart)
+library(rpart.plot)
+library(caret)
+library(RColorBrewer)
+library(rattle)
+library(lubridate)
+library(vip)
+
+library(forecast)
+library(scales)
+library(leaps)
+library(leaflet)
+
+```
+
+# Step I: Data Preparation & Exploration 
+```{r}
+# Load the data
+df <- read_csv("D:/BU/AD 699/Final/bangkok_listings.csv")
+
+# check the data dimension
+dim(df)
+
+```
+```{r}
+# filter the data only for my neighborhood
+df <- df %>% filter(neighbourhood_cleansed=="Vadhana")
+
+#view(df)
+#str(df)
+dim(df)
+#names(df)
+```
+# Checking Missing Values
+```{r}
+# first step：pick useful variables
+names(df)
+```
+
+* The variables must be kept: The following variables will be used in the models: neighborhood_overview,price,amenities,instant_bookable,review_scores_rating,variables related to rental
+
+* The variables must be removed：neighbourhood_group_cleansed,calendar_updated,license,bathrooms are all empty columns,so we need to remove those variables.
+
+* Remove other useless variables：id,scrape_id,listing_url,last_scraped,picture_url,host_id,host_url,host_name,host_about,host_thumbnail_url,host_picture_url,neighbourhood,neighbourhood_cleansed,calendar_last_scraped,first_review,last_review,description,name,host_neighbourhood,host_location
+
+
+```{r}
+##check the variables with the same value
+all.equal(df$host_listings_count,df$host_total_listings_count)
+#host_listings_count is the same as host_total_listings_count
+
+all.equal(df$minimum_nights,df$minimum_minimum_nights)
+all.equal(df$minimum_minimum_nights,df$maximum_minimum_nights)
+all.equal(df$maximum_nights,df$minimum_maximum_nights)
+all.equal(df$maximum_nights,df$maximum_maximum_nights)
+
+all.equal(df$minimum_nights,df$minimum_nights_avg_ntm)
+all.equal(df$maximum_nights,df$maximum_nights_avg_ntm)
+
+all.equal(df$host_total_listings_count,df$calculated_host_listings_count)
+      
+```
+* The records of minimum_nights,minimum_minimum_nights and minimum_nights_avg_ntm are almost the same, so we just keep minimum_nights.
+* The records of maximum_nights,maximum_maximum_nights and maximum_nights_avg_ntm are almost the same, so we just keep maximum_nights.
+
+* Now,we need to remove the variables that has the same or similar values as others:host_listings_count,minimum_minimum_nights,maximum_minimum_nights,minimum_maximum_nights,maximum_maximum_nights,minimum_nights_avg_ntm,maximum_nights_avg_ntm   
+
+```{r}
+df_2<- subset(df, select = -c(host_location,description,host_neighbourhood,name,scrape_id,neighbourhood_group_cleansed,calendar_updated,license,bathrooms,listing_url,last_scraped,picture_url,host_id,host_url,host_name,host_about,host_thumbnail_url,host_picture_url,host_listings_count,neighbourhood,neighbourhood_cleansed,minimum_minimum_nights,maximum_minimum_nights,minimum_maximum_nights,maximum_maximum_nights,minimum_nights_avg_ntm,maximum_nights_avg_ntm,calendar_last_scraped,first_review,last_review))
+
+dim(df_2)
+#names(df_2)
+#str(df_2)
+
+```
+#Second step: Dealing with NA
+```{r}
+# check again with missing value
+anyNA(df_2)
+
+##remove host_since(date type),replace "N/A" or "" with NA on a standard format
+df_2[,-3][df_2[,-3] == "N/A"] <- NA
+df_2[,-3][df_2[,-3]==""]<-NA
+
+```
+
+```{r}
+#get missing columns and their count
+missColCount=function(x){
+  sum(is.na (x))
+}
+
+# apply on the dataset
+sapply(df_2,missColCount)
+
+#get missing columns and their percentage
+missColCount=function(x){
+  mean(is.na (x))
+}
+
+# apply on the dataset
+sapply(df_2,missColCount)
+
+# str(df_2)
+```
+Variables with NA：
+* Missing values accounts for nearly 50 percent:neighborhood_overview, host_response_time, host_response_rate,host_acceptance_rate,review_scores_rating,review_scores_accuracy,review_scores_cleanliness,review_scores_checkin,review_scores_communication,review_scores_location,review_scores_value,reviews_per_month
+
+* missing values accounts for a small part of the whole database:bathrooms_text,bedrooms,beds
+
+
+```{r}
+#deal with NA
+dim(df_2)
+#Before we deal with NA, there are 2455 rows in the database.
+
+df_2<-df_2%>%drop_na(bedrooms)
+df_2<-df_2%>%drop_na(beds)
+df_2<-df_2%>%drop_na(bathrooms_text)
+df_2$reviews_per_month[is.na(df_2$reviews_per_month)] <- 0
+
+# Removes some missing value, the number of rows has been changed
+dim(df_2)
+#After dealing with NA, there are 2251 rows in the database
+```
+# Change variable type
+```{r}
+# copy new dataFrame
+df_3<-df_2
+str(df_3)
+
+#price
+df_3$price <- gsub("\\$", "", df_3$price)
+df_3$price<-gsub(",","",df_3$price)
+df_3$price<-as.numeric(as.character(df_3$price))
+
+#percentage
+df_3$host_response_rate <- as.numeric(gsub("%", "",df_3$host_response_rate ))/100
+df_3$host_acceptance_rate<-as.numeric(gsub("%", "",df_3$host_acceptance_rate))/100
+
+#factor
+df_3$host_response_time<-as.factor(df_3$host_response_time)
+df_3$host_is_superhost<-as.factor(df_3$host_is_superhost)
+df_3$host_has_profile_pic<-as.factor(df_3$host_has_profile_pic)
+df_3$host_identity_verified<-as.factor(df_3$host_identity_verified)
+df_3$property_type<-as.factor(df_3$property_type)
+df_3$room_type<-as.factor(df_3$room_type)
+df_3$bathrooms_text<-as.factor(df_3$bathrooms_text)
+df_3$has_availability<-as.factor(df_3$has_availability)
+df_3$instant_bookable<-as.factor(df_3$instant_bookable)
+
+# check again with data type on each variable
+#str(df_3)
+
+```
+
+# Interpretation for I- Missing Values: 
+We clean the database in the following steps. Firstly, we check the blank cells of the whole database. We find out that the cells of neighbourhood_group_cleansed,calendar_updated, license, bathrooms are all empty, which makes no sense to our exploration. Therefore, we remove those columns at first.
+
+Secondly, we pick up the useful variables before dealing with the NA. There are more than 70 variables in the entire database. Some of those variables have the same or similar values as other variables, and some variables are meaningless to our data exploration. So we remove those useless variables like scrape_id,listing_url to make the whole database more clear to see.
+
+After that, we check the missing values of the whole database. According to the database, missing values of bathrooms_text, bedrooms, and beds variables account for a tiny part of the entire column. So we can remove NAs of those variables since it does not hurt our database.
+
+Besides, there are almost 50 percent missing values in the neighborhood_overview,host_response_time,host_response_rate,host_acceptance_rate,review_scores_rating,review_scores_accuracy,review_scores_cleanliness,review_scores_checkin,review_scores_communication,review_scores_location,review_scores_value and reviews_per_month variables.
+
+We replace NA values of reviews_per_month with 0 since there is a high probability that reviews_per_month with NA indicates guests have not left any review.
+
+We do not process the NA of the remaining variables. First of all, these NAs occupy nearly half of the database. If they are deleted directly, the database will shrink severely. In other words, in some models, variables with a large number of NAs may not be used at all. In this case, variables with a large number of NAs will be directly deleted in the model. So, NAs that are not processed will not affect the model. On the contrary, if we delete rows with missing values in advance, it may greatly reduce the data available to the model, which affects the results of the model. Secondly, if we use 0 or median to fill these NAs, it may not reflect the actual situation. Finally, NA can also reflect valuable information. For example, there are many NAs in the review_scores_rating variable, resulting from many customers did not leave a rating. Customers who have not left a rating and those who have left a rating are likely to be different types of customers. So we can keep these NAs and list such non-rated customers as a separate category for exploration.
+
+
+#Summary Statistics
+```{r}
+range(df_3$price)
+mean(df_3$price)
+sd(df_3$price)
+var(df_3$price)
+pricemode<- table(df_3$price)
+pricemode<- table(df_3$price)%>%sort(pricemode, decreasing = TRUE)
+
+names(df_3)
+cor(x=df_3$price,y=df_3[,c(16,18,19,22,23,29,44)])
+fivenum(df_3$accommodates)
+```
+#Interpretation for summary statistic：
+Since this dataset shows us detailed information about different Airbnb in the neighborhood Vadhana, we decided to explore the relationships between price and different information. To understand more about the price, we first applied range() and mean() to know that the price range of Airbnb in Vadhana is between 0 and USD99,285 with the mean of USD2,453. Afterward, we applied sd() and var() to learn about the price’s statistical dispersion. The price’s standard deviation is USD4,740 with a variance of USD22,466,640, which means the price’s variability is significant. Finally, after applying table() and sort() to descend list the number of Airbnb at each price, we found that most Airbnb of 66 at the price of $1,500.
+
+After peeking at all the variables in the data, we use cor() to find the variables with a high correlation with price. Among accommodates  bedrooms, beds, minimum_nights,maximum_nights, number_of_reviews,reviews_per_month, accommodates variable is hugely impact the price. It shows a positive correlation between the accommodates and prices. Then we start by a fivenum() on accommodates to figure out the minimum value, lower-hinge value, median value, upper-hinge value and maximum value of this variable, which indicates the capacity of the guest of our neighborhood.
+
+#III. Data Visualization
+```{r}
+# plot 1
+ggplot(df_3, aes(x="", fill=factor(room_type))) + geom_bar(width = 1) +
+  theme(axis.title = element_blank(), 
+        plot.title = element_text(hjust = .5)) +
+  labs(fill="Room Types", x=NULL, y=NULL, 
+       title = "Room Types of Airbnbs in Vadhana") + 
+  coord_polar(theta = "y", start=0)
+```
+
+* Plot 1: According to the "Room Types of Airbnbs in Vadhana" pie chart, it's obvious that most rental of Airbnb in Vadhana is an entire home, which is more than the sum of the other three types.
+
+```{r}
+# plot 2
+ggplot(df_3, aes(x=accommodates)) + geom_histogram(binwidth = 1, fill="blue", color="red") + 
+  ggtitle("Accommodation Distribution of Airbnbs in Vadhana") + 
+  xlab("Accommodation per Room") + theme(plot.title = element_text(hjust = .5))
+```
+* Plot 2: According to the "Accommodation Distribution of Airbnbs in Vadhana" histogram, the accommodation per room is centralized to less than 5 people, and there are almost 1200 rooms here that can accommodate only 2 people. One thing to note is that the even number of accommodations is relatively more than the odd number.
+
+```{r}
+#plot 3
+ggplot(df_3,aes(x=accommodates,y=reorder(property_type, accommodates)))+geom_point()+ 
+  ggtitle("Accommodation of each Property Type of Airbnbs in Vadhana") + 
+  xlab("Accommodation") + ylab("Property Type") + theme(plot.title = element_text(hjust = .5))
+```
+* Plot3: According to the "Accommodation of each Property Type of Airbnbs in Vadhana" Cleveland plot, we can have a good understanding of how many people can be accommodated by each property type. One thing to note is that the entire house type can accommodate one person to more than 15 people, which is the most appropriate type of rental for guests who are not sure about the number of companions.
+
+```{r}
+# plot 4
+ggplot(df_3, aes(x=review_scores_rating)) + geom_area(stat = "bin", bins = 20, fill = "steelblue") + 
+  ggtitle("Review Scores Trend of Airbnbs in Vadhana") + xlab("Review Score")+ 
+  theme(plot.title = element_text(hjust = .5))
+```
+
+* Plot 4: According to the "Review Scores Trend of Airbnbs in Vadhana" area plot, guests who rent Airbnb in Vadhana tend to rate their rental experience more than 75 out of 100 points. Our takeaway from this trend is that people tend to give a high review score (more than 80) if they're impressed by the rental experience with Airbnb.
+
+```{r}
+# plot 5
+df_year <- data.frame(host_year=format(df_3$host_since, format="%Y"))
+df_year <- data.frame(year=c(2009:2021),
+                      number_of_host = c(1,46,44,43,198,195,489,395,235,350,312,176,1))
+ggplot(df_year, aes(x=year, y=number_of_host)) + geom_line(color="steelblue") + 
+  ggtitle("Host Number of Airbnbs in Vadhana each Year") + xlab("Year")+ ylab("Number of Host") +
+  theme(plot.title = element_text(hjust = .5))
+
+```
+Plot 5: According to the "Host Number of Airbnbs in Vadhana each Year" line chart, the host number increased significantly from 2014 to 2015 and climbed to the peak in 2015 of near 500 Airbnbs. After some fluctuate between 2015 and 2018, the number of hosts dropped dramatically until 2020.
+
+#IV. Mapping
+```{r}
+# Visualize the map
+m <- leaflet() %>% addTiles() %>% addMarkers(lng=100.58621, lat=13.74296) %>% 
+  addProviderTiles(providers$OpenStreetMap.DE)
+m
+```
+
+* answer to Mapping：According to the map, the house is located on the bank of the river. So the guest here can enjoy the beautiful river view from the house. Besides, the house is nearby the bus station on the main road, and the Watthana District Office, indicating convenient travel and a safe living environment. It is close to the restaurant as well, so the guest of this house can enjoy the local cuisine easily.
+
+
+```{r}
+###V. Wordcloud
+names(df_3)
+overview<-df_3[,2]
+overview <- overview %>%
+  mutate(id=c(2))
+overview[is.na(overview)] <- ""
+
+br <- data.frame(word = c("br",0:1000))
+
+tidy_overview <- overview %>%
+  unnest_tokens(word, neighborhood_overview) %>%
+  anti_join(stop_words) %>%
+  anti_join(br) %>%
+  drop_na() %>%
+  count(word, sort=TRUE)
+
+wordcloud(words = tidy_overview$word, freq = tidy_overview$n, min.freq = 1, scale=c(4,.5),
+          max.words=100, random.order=FALSE, rot.per=0.35,colors=brewer.pal(8, "Dark2"),
+          fixed.asp = TRUE)
+
+```
+
+*Answer to Wordcloud: Minutes, distance, km, walk, nearby, walking are conspicuous in the Word cloud. The reason is obvious that guests always value the location of the house, so the hosts tend to emphasize those words to show the excellent location of the house to attract more residents. Sukhumvit and bts imply that a large part of houses are located in or nearby Sukhumvit road and bts station. In addition, guests are inclined to find the house surrounded by convenience facilities, so hosts highlight the shopping, restaurants, mall, store, and market in the overview as well. By the way, it is interesting that there are some Chinese words like "分钟“(i.e. synonyms of the English word minutes ), "步行"(i.e. synonyms of the English word walk and walking), "网”(i.e. synonyms of the English word network and Internet). It shows that there are many Chinese hosts and Chinese guests in our neighborhood.
+
+
+# Step II: Prediction
+
+Remove columns has high percentage of NA values
+```{r}
+df_4 <- subset(df_3, select = -c(neighborhood_overview,host_response_rate,host_acceptance_rate,
+review_scores_rating,review_scores_accuracy,review_scores_cleanliness,        review_scores_checkin,review_scores_communication,review_scores_location,
+review_scores_value,reviews_per_month))
+```
+
+Remove some non-numeric variable
+```{r}
+df_pred<- subset(df_4, select = -c(host_since,host_response_time,
+                            property_type,bathrooms_text,
+                            has_availability,host_verifications))
+```
+
+
+```{r}
+# Count number of amenities
+df_pred$amenities <- str_count(df_pred$amenities,",")+1
+```
+
+
+```{r}
+# Change the data type in room_type
+df_pred$room_type <- as.character(df_pred$room_type)
+```
+
+
+```{r}
+# double check the missing value
+missColCount=function(x){
+  mean(is.na (x))
+}
+sapply(df_pred,missColCount)
+```
+
+Change logic T/F into numeric 0/1 format.
+```{r}
+df_pred$host_is_superhost <- as.numeric(ifelse(df_pred$host_is_superhost == 'TRUE', 1, 0))
+
+df_pred$host_has_profile_pic <- as.numeric(ifelse(df_pred$host_has_profile_pic == 'TRUE', 1, 0))
+
+df_pred$host_identity_verified <- as.numeric(ifelse(df_pred$host_identity_verified == 'TRUE', 1, 0))
+
+df_pred$instant_bookable<-as.numeric(ifelse(df_pred$instant_bookable == 'TRUE', 1, 0))
+```
+
+
+
+```{r}
+# delete some unnessary columns
+df_pred <- subset(df_pred, select = -c(minimum_nights,maximum_nights,
+                                 availability_30,availability_60,
+                                 availability_90,availability_365,
+                    calculated_host_listings_count_entire_homes,
+                    calculated_host_listings_count_private_rooms,
+                    calculated_host_listings_count_shared_rooms))
+```
+
+
+Showing high skewers for price, we need to make log transformation for better prediction
+```{r}
+hist(df_pred$price)
+hist(log(df_pred$price))
+```
+
+```{r}
+set.seed(699)
+train.index <- sample(row.names(df_pred), 0.6*dim(df_pred)[1])  
+valid.index <- setdiff(row.names(df_pred), train.index)  
+train <- df_pred[train.index, ]
+valid <- df_pred[valid.index, ]
+```
+
+
+```{r}
+mlr_model<- regsubsets(log(price) ~.,data=train,
+                          nvmax =dim(train)[2],method='exhaustive')
+options(scipen=999)
+
+reg.sum<-summary(mlr_model)
+with(reg.sum, data.frame(rsq, adjr2, cp, rss, outmat))
+
+```
+
+```{r}
+reg.sum_df<-data.frame(
+  R_Squared=which.max(reg.sum$rsq),
+  Adj.R2=which.max(reg.sum$adjr2),
+  CP=which.min(reg.sum$cp),
+  BIC=which.min(reg.sum$bic)
+)
+
+reg.sum_df
+```
+
+```{r}
+model_1 <- lm(log(price) ~ ., data = train)
+summary(model_1)
+```
+```{r}
+df_modify <- subset(df_pred, select = -c(room_type))
+```
+
+
+```{r}
+cor_table <- round(cor(df_modify),2)
+upper<-cor_table
+upper[upper.tri(cor_table)]<-""
+upper<-as.data.frame(upper)
+upper
+```
+
+* Remove high correlation pairs:  host_total_listings_count and calculated_host_listings_count,number_of_reviews and number_of_reviews_130d, latitude and longitude, accommodates and bedrooms.
+
+
+```{r}
+vif(model_1)
+```
+
+Remove accommodates since it has high VIF.
+```{r}
+model_2 <- lm(log(price) ~ host_is_superhost+host_has_profile_pic+host_identity_verified+room_type +
+longitude+bedrooms+beds+number_of_reviews_ltm+calculated_host_listings_count,data = train)
+
+summary(model_2)
+```
+
+```{r}
+vif(model_2)
+```
+Check the model performance
+```{r}
+# training data
+pred1 <- predict(model_2, train)
+accuracy(pred1, log(train$price))
+  
+# testing data
+pred2 <- predict(model_2, valid)
+accuracy(pred2, log(valid$price))
+```
+
+# Summary for multiple linear regression model:
+# A. Describe your process. How did you wind up including the independent variables that you kept, and discarding the ones that you didn’t keep? In a narrative of at least two paragraphs, discuss your process and your reasoning. In the write-up, be sure to talk about how you evaluated the quality of your model.
+
+First of all, We removed columns with a high percentage of NA values, to be more specific, those columns have more than 40% rows with missing values. Most of them are review score data, and We think they do not have an impact on price. Then, We dropped some non-numeric variables such as host_location. It does not make sense if we change it into numerical value because we do not know if host_location 31 is better than host_location 7. Those variables do not have predictive power to our outcome since most of them have unique values. We changed host-related data into 0/1 format, 0 means False and 1 means True. Based on the research, superhost earns 60% more revenue per available day. So we want to know if host data has some relationship with price. As noticed, calculated_host_listings_count is the sum of
+The other three variables, so keep the sum is enough. We also changed the amenities into numerical count and switch room type into categorical data.\
+
+The histogram shows that the distribution of price is very skewed so we need transformation to make it more normal. We did data partitioning before building the prediction model. Then, we chose the exhaustive subset method with 16 inputs and log(price) as the outcome and the highest adjusted R-squared is 15. To reduce the number of predictors, we built the correlation table to see if inputs have strong multicollinearity that would impact the model. The high correlation pairs are: host_total_listings_count and calculated_host_listings_count,number_of_reviews and number_of_reviews_130d, latitude and longitude, accommodates and bedrooms. Also, we dropped the inputs that have VIF value greater than 4.\ 
+
+# B. Show a screenshot of your regression summary, and explain the regression equation that it generated.
+Therefore, our multiple linear regression has 9 inputs. The overall p-value is very small which means our model statistically significant. 
+The MLR equation is: log(price) = -0.113*host_is_superhost -0.752*host_has_profile_pic -0.094*host_identity_verified -0.0943*room_typeHotel room - 0.131*room_typePrivate room
+-1.113*room_typeShared room - 9.400*longitude+0.486*bedrooms-0.030*beds
+-0.040*number_of_reviews_ltm -0.002*calculated_host_listings_count+953.120\
+
+The log transformation of price makes it hard to interpret the result, but we can still get some insights. As noticed, the host-related data decreases the log(price). It makes sense because lowering the price helps super hosts or verified hosts attract more visitors to stay and give them good reviews. More calculated total listing means the host has more rooms for rent, in this case, we guess that they are not price sensitive to each room. \
+Compare with the entire room type, the other three room types have negative impacts on the log(price). In general, it costs more to rent an entire room since you get a whole space that usually includes a bedroom, a bathroom, and a kitchen. In addition, longitude has a relatively negative coefficient but in fact, the range of the longitude varies from 100.5503 to 100.6066 since they are in the same neighborhood. The difference in price may come from the outdoor view, for instance, a river view room is more expensive than a street view room. Also, adding an extra bedroom would cost more whereas adding a bed costs less because it means more people share a room. For the number of reviews, the host is willing to give some discount if the customers give them good comments, which is a good way to help them advertise. \
+
+# C.Analyze any other metrics that are relevant for linear regression models. Based on these, what can you say about your model’s performance in 1-2 paragraphs.
+The multiple R-squared is 0.4171, which means our MLR model is not a very good fit. 
+F test of 87.04 measures the overall significance level. Comparing with the previous model, which F test is 56.33, this model is more significant. Since RMSE and MAE in training set is smaller than those in validation set, we can conclude that the training set performance measures appear better than those for the validation set. Therefore, we think the MLR model is not a good tool for predicting price. 
+
+
+# Step III: Classification
+
+# Part 1: KNN
+```{r}
+####cleaning
+knnM <- df_3[,-c(1,2,3,4,5,6,7,9,10,11,14,15,24,39)]
+knnM[,5] <- as.numeric(sapply(strsplit(as.character(knnM$bathrooms_text), " "), "[[", 1))
+knnM[,5] <- as.numeric(gsub("([0-9]+).*$", "\\1",
+                            knnM$bathrooms_text))
+###Target 
+g <- data.frame(FullKitchen = ifelse(grepl("Oven.*Cooking.*Kitchen|Oven.*Kitchen.*Cooking|Kitchen.*Cooking.*Oven|Kitchen.*Oven.*Cooking|Cooking.*Kitchen.*Oven|Cooking.*Oven.*Kitchen",knnM$amenities), "1", "0"))
+sum(as.numeric(g$FullKitchen))
+
+knnM[8] <- as.factor(g$FullKitchen)
+names(knnM)[8] <- c("FullKitchen")
+```
+I removed all non-numeric data except amenities. I used ifelse() function and grepl() function to convert amenities to a 0/1 data. 0 means that this Airbnb does not provide ovens, cooking basics, and kitchens. 1 means that this Airbnb does provide ovens, cooking basics and kitchens. I think figuring out an Airbnb has a full kitchen is interesting. 
+
+```{r}
+missColCount=function(x){
+  mean(is.na (x))
+}
+sapply(knnM,missColCount)
+knnMN <- drop_na(knnM)#Drop all Na first for variable differencing.
+```
+Because I need to use the differences of each variable between two target groups to decide which variables I would use in my model, I just removed all NA for applying variables differencing. If some variables I don't need to use in my model, I can just delete the whole column instead of dropping the missing value.
+```{r}
+#diff function
+knnMN_diff <- knnMN %>%
+  group_by(FullKitchen) %>%
+  summarize(across(where(is.numeric),~ mean(.x)))
+per_diff <- data.frame(head(knnMN_diff))
+diff <- abs((per_diff[1,2:30]-per_diff[2,2:30]) / per_diff[1,2:30]) 
+diff > 0.05
+knndata <- subset(knnM, select = -c(latitude,longitude,availability_30,
+            availability_60,availability_90,availability_365,
+            review_scores_rating,review_scores_accuracy,
+            review_scores_cleanliness,review_scores_checkin,
+            review_scores_communication,review_scores_location,
+            review_scores_value,reviews_per_month ))
+sapply(knndata,missColCount)
+```
+Based on the percentage differences of each variable's average value between target groups, I decide to delete all of the variables with less than a 5% difference. Here, the luckiest story is that I don't need to use all of the variables having almost half of the missing value. I can drop other missing values without losing too many observations.
+```{r}
+###knn modeling####
+set.seed(699)
+number <- runif(nrow(knndata))
+train_F <- subset(knndata, number <= 0.6)
+valid_F <- subset(knndata, number > 0.6)
+##normalizing
+train.norm.df <- train_F
+valid.norm.df <- valid_F
+norm.values <- preProcess(train_F[,-c(6)], method=c("center", "scale"))
+train.norm.df[, -c(6)] <- predict(norm.values, train_F[, -c(6)])
+valid.norm.df[, -c(6)] <- predict(norm.values, valid_F[, -c(6)])
+# compute knn for different k on validation.
+accuracy.df <- data.frame(k = seq(1, 30, 1), accuracy = rep(0, 30))
+for(i in 1:30) {
+  knn.pred <- knn(train = train.norm.df[, -c(6)], test = valid.norm.df[, -c(6)], 
+                  cl = train.norm.df$FullKitchen, k = i)
+  accuracy.df[i, 2] <- confusionMatrix(knn.pred, valid.norm.df$FullKitchen)$overall[1] 
+}
+accuracy.df
+ggplot(data=accuracy.df, aes(x=k, y=accuracy)) + geom_point()
+which.max(accuracy.df$accuracy)
+```
+
+I used a loop to help me generate the accuracy rate for different k. And finally, I found that the 9 is the optimal k-value for this model. Because it has the highest accuracy rate which is 93.5%.
+
+
+# part 2: Naive Bayes
+
+# Data processing
+```{r}
+names(df_3)
+```
+```{r}
+df_naive<-df_3
+```
+
+
+
+```{r}
+#This will remove all columns containing at least one NA:
+df_naive<-df_naive[ , apply(df_naive, 2, function(x) !any(is.na(x)))]
+
+df_naive<-df_naive[,c('host_is_superhost',"host_identity_verified","room_type","accommodates","price","minimum_nights","maximum_nights","has_availability","availability_30","instant_bookable","calculated_host_listings_count")]
+
+#str(df_naive)
+
+table(df_naive$instant_bookable)
+
+```
+
+Bins
+```{r}
+
+fivenum(df_naive$accommodates)
+df_naive$accommodates<-cut(df_naive$accommodates,breaks=c(-1,2,4,16),labels=c('small','middle','big'))
+
+
+fivenum(df_naive$price)
+df_naive$price<-cut(df_naive$price,breaks=c(-1,900,1450,2400,99285),labels=c('cheap','normal','little bit higher','luxury'))
+
+
+fivenum(df_naive$minimum_nights)
+df_naive$minimum_nights<-cut(df_naive$minimum_nights,breaks=c(-1,2,10,600),labels=c('short','normal','long'))
+
+fivenum(df_naive$maximum_nights)
+df_naive$maximum_nights<-cut(df_naive$maximum_nights,breaks=c(-1,365,1125,100000),labels=c('short','normal','long'))
+
+table(df_naive$maximum_nights)
+
+df_naive<-filter(df_naive,maximum_nights=='short'|maximum_nights=='normal')
+df_naive$maximum_nights<-droplevels(df_naive$maximum_nights)
+
+
+fivenum(df_naive$availability_30)
+df_naive$availability_30<-cut(df_naive$availability_30,breaks=c(-1,10,20,30),labels=c('busy','moderate','free'))
+
+
+fivenum(df_naive$calculated_host_listings_count)
+df_naive$calculated_host_listings_count<-cut(df_naive$calculated_host_listings_count,breaks=c(-1,2,5,177),labels=c('small','moderate','huge'))
+
+
+str(df_naive)
+```
+
+Second selection --- check the visualization
+```{r}
+ggplot(df_naive,aes(fill=instant_bookable, x=host_is_superhost))+geom_bar(position="fill")
+ggplot(df_naive,aes(fill=instant_bookable, x=host_identity_verified))+geom_bar(position="fill")
+ggplot(df_naive,aes(fill=instant_bookable, x=room_type))+geom_bar(position="fill")
+ggplot(df_naive,aes(fill=instant_bookable, x=accommodates))+geom_bar(position="fill")
+ggplot(df_naive,aes(fill=instant_bookable, x=price))+geom_bar(position="fill")
+ggplot(df_naive,aes(fill=instant_bookable, x=minimum_nights))+geom_bar(position="fill")
+ggplot(df_naive,aes(fill=instant_bookable, x=maximum_nights))+geom_bar(position="fill")
+ggplot(df_naive,aes(fill=instant_bookable, x=has_availability))+geom_bar(position="fill")
+ggplot(df_naive,aes(fill=instant_bookable, x=availability_30))+geom_bar(position="fill")
+ggplot(df_naive,aes(fill=instant_bookable, x=calculated_host_listings_count))+geom_bar(position="fill")
+```
+
+# Build the model
+```{r}
+df_naive<-df_naive[,-7]
+library(e1071)
+set.seed(699)
+dt_naive<-sample(nrow(df_naive), nrow(df_naive)*.6)
+train_naive<-df_naive[dt_naive,]
+valid_naive<-df_naive[-dt_naive,]
+
+bookable<-naiveBayes(instant_bookable~.,data=train_naive)
+bookable
+```
+
+# Fictional host
+```{r}
+f_apart<-data.frame(host_is_superhost=TRUE,host_identity_verified='TRUE',room_type='Entire home/apt',accommodates='big',price='little bit higher',minimum_nights='normal',has_availability='TRUE',availability_30='moderate',calculated_host_listings_count='moderate')
+predict_f<-predict(bookable,f_apart,type='raw')
+predict_f
+
+class_F<-0.4385185*0.2027027*0.7212838*0.66722973*0.1672297*0.2753378*0.1537162*0.94932432*0.02364865*0.1858108
+class_T<-0.5614815*0.2414248*0.6754617*0.62796834*0.1635884*0.2242744*0.1094987*1.00000000*0.03825858*0.1860158
+
+
+total_TF<-class_T+class_F
+class_T_score=class_T/total_TF
+class_F_score=class_F/total_TF
+class_T_score;class_F_score
+```
+
+# check the model accuracy
+```{r}
+library(caret)
+pred_t_naive<-predict(bookable,newdata=train_naive)
+confusionMatrix(pred_t_naive,train_naive$instant_bookable)
+
+pred_v_naive<-predict(bookable,newdata=valid_naive)
+confusionMatrix(pred_v_naive,valid_naive$instant_bookable)
+```
+
+# Mostly likely to be instant_bookable or not instant_bookable 
+```{r}
+pred.prob<-predict(bookable,newdata=valid_naive,type='raw')
+pred.class<-predict(bookable,newdata=valid_naive)
+pro_df<-data.frame(actual=valid_naive$instant_bookable,predict_class=pred.class,pred.prob)
+set.seed(699)
+likely_false<- pro_df[order(-pro_df$FALSE.),]
+likely_false<-likely_false[1:300, ]
+
+likely_true<- pro_df[order(-pro_df$TRUE.),]
+likely_true<-likely_true[1:300, ]
+
+prop.table(table(likely_false$actual))
+
+prop.table(table(likely_true$actual))
+```
+For the feature selection, because there are over 40 predictors, so we take several step to select predictors We first delete all the columns which have NA values. For one reason, we want to keep all predictors have real information, and we do not want make up some information for those NA values. The second reason, we do not want to delete any rows, because we want to keep the amount of our data set and build more accurate model. For those predictors which don't have NA value, our principle is just selecting some predictors that are numeric variables or categorical variables with fewer classes. And after that, we delete some predictors which have similar feature with others. For example, availability_30,availability_60,availability_90 and availability_365, we only choose availability_30. Last step is after finish predictor choosing and convert numeric predictor into categorical predictor, we plot the relationship between each predictor with the output variable instant_bookable, in order to see if there are some predictors having same ability in different classes. If there are, we delete them.
+
+From the result of the model,we can notice that the priori-probabilityies of FALSE and TRUE, which is also the naive rule result of each class. That's also mean there are 44.9% of apartment in training data is not instant_bookable and the rest is instant_bookable. For the conditional probabilities, for the instant_bookable is TRUE or is FALSE, we can see the probability against each predictor's class. The accuracy of model against training set is 63.41% which is slightly higher than the accuracy against valid set,60%. And the accuracy against training set and valid set are both higher than the naive rule accuracy, 56.15% and 54.78% respectively. By comparing these two accuracies against training set and validation set, there is no obvious over fitting. And from the result of most likely to be FASLE and TRUE, we can notice that if we have predicted one apartment to be not instant_bookable then we would have 58% accuracy, which is much higher than the naive rule probability 45%. If we have predicted one apartment to be instant_bookable then we would have 65% accuracy, which is also much higher than the naive rule probability 55%. Overall, our model have good performance on prediction the status of instant_bookable for apartment.
+
+# part 3- tree model
+```{r}
+# copy new data for building tree model
+df_tree <-df_3
+```
+
+
+```{r}
+# check the range of review_scores_rating
+df_tree$review_scores_rating <-as.numeric(df_tree$review_scores_rating)
+fivenum(df_tree$review_scores_rating)
+```
+
+# make bins for outcome variable- review_scores_rating
+```{r}
+df_tree$review_scores_rating<-cut(df_tree$review_scores_rating,breaks=c(20,95,100),
+                          labels = c('below_five_class','five_class'))
+table(df_tree$review_scores_rating)
+```
+
+```{r}
+str(df_tree$review_scores_rating)
+```
+
+```{r}
+# check the missing value of review_scores_rating
+sum(is.na(df_tree$review_scores_rating))
+```
+
+```{r}
+ #Add the extra level to this factor
+levels(df_tree$review_scores_rating)<-c(levels(df_tree$review_scores_rating),"No_reviews") 
+
+#Change NA to "No_reviews"
+df_tree$review_scores_rating[is.na(df_tree$review_scores_rating)] <- "No_reviews"           
+```
+
+```{r}
+table(df_tree$review_scores_rating)
+```
+
+# Prepocessing the data
+
+```{r}
+names(df_tree)
+```
+
+```{r}
+table(df_tree$availability_30)
+```
+ 
+```{r}
+# drop this uncorrelated features: host_location,neighborhood_overview,host_has_profile_pic,
+
+# drop this column--- only three items belong false
+table(df_tree$host_has_profile_pic)
+```
+```{r}
+# drop this column--- only three items belong false
+table(df_tree$host_identity_verified)
+```
+
+```{r}
+# change the date type of host_since 
+df_tree$host_duration_yr<-as.numeric(difftime(Sys.Date(),as.Date(df_tree$host_since)),units = "weeks")/52.25
+
+# show the hosting years
+head(df_tree$host_duration_yr)
+
+```
+
+```{r}
+table(df_tree$room_type)
+```
+
+
+```{r}
+table(df_tree$host_identity_verified)
+```
+
+
+```{r}
+# drop this column --- only six
+table(df_tree$has_availability)
+```
+```{r}
+table(df_tree$instant_bookable)
+```
+
+```{r}
+# transform amenities features
+df_tree$amenities_count<-str_count(df_tree$amenities, ",")+1
+head(df_tree$amenities_count)
+```
+
+```{r}
+final_tree_df <-select(df_tree,c(host_duration_yr,host_is_superhost,host_identity_verified,room_type,amenities_count,price,minimum_nights,maximum_nights,availability_30,number_of_reviews,instant_bookable,calculated_host_listings_count,review_scores_rating))
+dim(final_tree_df)
+```
+
+```{r}
+summary(final_tree_df)
+```
+
+
+```{r}
+str(final_tree_df)
+```
+# building tree model
+```{r}
+# train-valid-split
+set.seed(699)
+data=sample.split(final_tree_df$review_scores_rating,SplitRatio=0.6)
+
+#subset 60% Train data
+train_tree=subset(final_tree_df,data==TRUE)
+
+#subset 40% valid data
+valid_tree=subset(final_tree_df,data==FALSE)
+```
+
+
+```{r}
+tree_model <-rpart(review_scores_rating~.,
+               data=final_tree_df,cp=0,minsplit =2,method = 'class',xval=10)
+```
+
+```{r}
+options(scipen = 999)
+a<-printcp(tree_model)
+a<-data.frame(a)
+plotcp(tree_model)
+```
+
+```{r}
+# identify the optimal number of n-split
+which.min(a$xerror)
+which.min(a$xstd)
+```
+Determine the ideal size of this tree using cross-validation
+```{r}
+model2<-rpart(review_scores_rating~.,
+               data=train_tree,cp=0.00566893,  method = 'class',xval=10)
+```
+
+Using rpart.plot and your choice of graphical parameters, show the tree model here.
+```{r}
+rpart.plot(model2,box.palette="RdBu",varlen =-10,extra =1 ,type=2,split.font =1,cex=0.5,fallen.leaves=TRUE)
+```
+
+# check the model performance using optimal CP(0.00566893) ---(option 1)
+```{r}
+# training set
+model2.predict <-predict(model2,train_tree,type='class')
+confusionMatrix(model2.predict,train_tree$review_scores_rating)
+```
+```{r}
+# validation set
+model2.predict2 <-predict(model2,valid_tree,type='class')
+confusionMatrix(model2.predict2,valid_tree$review_scores_rating)
+```
+# check the model performance when CP is 0.00529101 ---(Option 2)
+```{r}
+model3<-rpart(review_scores_rating~.,
+               data=train_tree,cp= 0.00377929,method = 'class',xval=10)
+```
+
+```{r}
+rpart.plot(model3,box.palette="RdBu",varlen =-10,extra =1 ,type=2,split.font =0.9,cex=0.45,fallen.leaves=TRUE)
+```
+
+```{r}
+# training set
+model3.predict <-predict(model3,train_tree,type='class')
+confusionMatrix(model3.predict,train_tree$review_scores_rating)
+```
+
+```{r}
+# validation set
+model3.predict2 <-predict(model3,valid_tree,type='class')
+confusionMatrix(model3.predict2,valid_tree$review_scores_rating)
+```
+
+```{r}
+model3$variable.importance
+```
+
+```{r}
+# visualize the features importance
+vip(model3,mapping = aes_string(fill = "Variable"),
+    aesthetics = list(color = "lightblue", size = 0.8))
+```
+
+ In a 1-2 paragraph write-up, describe your process. Talk about some of the features that you considered using, and your reasons why. Mention anything that you found interesting as you explored various possible models, and the process you used to arrive at the model you finished with. Talk about the relative sizes of each bin (using the number of records per bin) and how that may have impacted your model.
+
+# Features selection: 
+host_duration_yr,host_is_superhost,host_identity_verified,room_type,amenities_count,price,minimum_nights,maximum_nights,availability_30,number_of_reviews,instant_bookable,calculated_host_listings_count,review_scores_rating
+
+# Reasons：
+There are several features I want to mention here.  
+* host_is_superhost: According to the Airbnb help center, Superhosts are experienced hosts who provide a shining example for other hosts, and extraordinary experiences for their guests, and will automatically appear on their listing and profile to help us identify them, so I consider it is possibly correlated with reviews score and assume that the host who is "superhost" is more likely to receive higher reviews score since they satisfy Airbnb’s criteria for high-quality listings, high response rate, and reliability. 
+
+* Host_duration_yr: In fact, this feature don't exist in our dataset, but I transform host_since into it for better interpretation and predicting outcome variable.Host_since is date type, which tells when the host begins to run an Airbnb, so I calculate time difference(duration) in year unit compared with current date and the start time of hosting Airbnb, represented by "Host_duration_yr". I guess that the host whose hosting duration time is longer is more likely to receive higher score due to its experienced service and reliability. 
+
+* amenities_count: This feature also don't appear in our dataset, but I change amenities into the number of amenities, since amenities includes many different items for different hosts, like Air conditioning, Dryer, Pool,TV, it seems hard for us to collect all categories, so I decide to count the number of amenities. Generally, we will assume that the more amenities a building has, the more likely it will gain a competitive edge in attracting prospective customers, indicating that the host is verified for quality, comfort and design. So I consider it is likely that the number of amenities is related with reviews score that client offers,because it will impact their travel experience and people prefer to satisfied with living in well-equipped house. 
+
+# Outcome variables(review_scores_rating): 
+By checking the Airbnb website, it is said that the Airbnb review system consists of a star rating and a written review, and both are optional for guests (and hosts) to use. Guests can give star ratings, up to 5 stars, for overall experience, cleanliness, accuracy, value, communication, arrival and location.
+By using Fivenum function, we found that a majority of scores is more than 90, so I decide to make two bins for dividing two categories, including below_five_class(less than 95) and five_class(more than 95), which means our goal is to classify whether this host reaches the five-class level or not in a review system based on different attributes. And The bins size for two levels approximately create balance data,contributing to model prediction well without biasing specific level. Otherwise, rpart will generate an error due to imbalance data instead of a decision tree,because it recognizes that it’s achieving the highest accuracy by simply predicting all cases to one level which has the largest amount of data, but it will mislead our interpretation and we cannot work on predicting the outcome variable accurately in reality.
+
+# dealing with missing value about review_scores_rating:
+It shows that review_scores_rating has 1044 missing values in our model.The reason why the review_scores_rating occurs missing value is complicated, for example, some kinds of people don't like to spent time on posting their personal reviews no matter they like it or not.Therefore, In this case, we use "No_reviews" to replace "NA" here,indicating that this extra level characterized approximately 43% people who is least likely to share their reviews.However,if we ignore these records, we will miss the huge important data in analyzing and predicting this type of people by using other attributes. 
+
+# interesting insights when exploring various possible model and and the process you used to arrive at the model I finished with.
+After making features selection, for the tree model, we firstly choose the optimal CP value (0.00531538) which nsplit is 3 after identifying the smallest tree that has smallest error rate,its accuracy in training set is about 0.8064 which is higher than against testing set about 0.7823. Its decision tree plot look goods but a little bit simple with fewer trees(nsplit).In order to improve the model accuracy as well as tree interpretation, I decide to decrease CP to 0.00318923 which its Xstd error is 0.39901 close to Option 1 but the nsplit now is 5 which further increases the tree depth for better understanding relationship between predictors and review_scores_rating,contributing to increasing model accuracy about 0.8342 in training set. Taking different factors into consideration, we decide to use option 2 as our final tree model.
+
+The results tell us that there is a trade-off between the size of a tree and the error rate to help prevent overfitting, and optimally-sized tree within a reasonable range of CP should be taken into consideration for better model prediction. Consequently, there is a balance to be achieved in the depth and complexity of the tree to optimize predictive performance on future unseen data.
+
+# Make up a host, predicted by "Five-Class" based on decision tree plot.
+The host: number of reviews >=1 ----> host is Superhost ----> availability_30<=30 -----> five_class
+
+
+# Step V: Clustering
+
+# Feature selection:
+```{r}
+# copy new dataframe for building clusters
+df_cluster <- df_3
+```
+
+
+```{r}
+# handling missing value
+df_cluster<-drop_na(df_cluster,bedrooms)
+df_cluster<-drop_na(df_cluster,beds)
+dim(df_cluster)
+```
+```{r}
+# data engineering
+df_cluster$host_duration_yr<-as.numeric(difftime(Sys.Date(),as.Date(df_cluster$host_since)),units = "weeks")/52.25
+
+df_cluster$amenities_count<-str_count(df_cluster$amenities, ",")+1
+```
+
+```{r}
+#names(df_cluster)
+```
+
+```{r}
+# create new dataframe
+final_cluster<-df_cluster[,c('id','host_duration_yr','accommodates','bedrooms','price','amenities_count','maximum_nights','minimum_nights','availability_30','number_of_reviews','calculated_host_listings_count')]
+
+dim(final_cluster)
+```
+```{r}
+length(unique(final_cluster$id))
+```
+
+```{r}
+# set unique id as rowname 
+final_cluster<-column_to_rownames(final_cluster, 'id')
+head(final_cluster)
+```
+
+
+
+
+```{r}
+# normalize the dataframe
+cluster_norm <-sapply(final_cluster,scale)
+cluster_norm<-as.data.frame(cluster_norm)
+row.names(cluster_norm) <-row.names(final_cluster)
+head(cluster_norm)
+```
+
+
+```{r}
+# without normalization -- elbow plot
+set.seed(699)
+k.max <-15
+wss <- sapply(1:k.max, 
+              function(k){kmeans(cluster_norm, k, nstart=50, iter.max=15)$tot.withinss})
+wss
+
+plot(1:k.max, wss,
+     type = "b", pch=20, frame=FALSE,
+     xlab = "Number of Cluster K",
+     ylab = "Total Within-clusters sum of Squares")
+
+```
+# All features:
+'host_duration_yr','accommodates','bedrooms','price','amenities_count','maximum_nights','minimum_nights','availability_30','number_of_reviews','calculated_host_listings_count'
+
+# Select features:
+price  --- 5
+host_duration_yr  --- 3
+availability_30  --- 2
+number_of_reviews --- 6
+
+maximum_nights -- 8
+minimum_nights -- 8
+
+amenities_count --- 8
+accommodates ---5
+bedrooms  ---7
+calculated_host_listings_count---4
+
+
+```{r}
+cluster_norm2 <-as.data.frame(cluster_norm)
+cluster_norm2$price <-cluster_norm2$price*5
+cluster_norm2$host_duration_yr <-cluster_norm2$host_duration_yr*3
+cluster_norm2$availability_30 <-cluster_norm2$availability_30*2
+cluster_norm2$number_of_reviews <-cluster_norm2$number_of_reviews*6
+cluster_norm2$maximum_nights <-cluster_norm2$maximum_nights*8
+cluster_norm2$minimum_nights <-cluster_norm2$minimum_nights*8
+cluster_norm2$amenities_count <-cluster_norm2$amenities_count*8
+cluster_norm2$accommodates <-cluster_norm2$accommodates*5
+cluster_norm2$bedrooms <-cluster_norm2$bedrooms*7
+cluster_norm2$calculated_host_listings_count <-cluster_norm2$calculated_host_listings_count*4
+```
+
+```{r}
+#normalization -- elbow plot
+set.seed(699)
+k.max <-15
+wss <- sapply(1:k.max, 
+              function(k){kmeans(cluster_norm2,k, nstart=50, iter.max=15)$tot.withinss})
+wss
+
+plot(1:k.max, wss,
+     type = "b", pch=20, frame=FALSE,
+     xlab = "Number of Cluster K",
+     ylab = "Total Within-clusters sum of Squares")
+
+```
+
+```{r}
+# summary stats
+set.seed(699)
+km <- kmeans(cluster_norm2, 5, nstart=150)
+km$centers
+```
+
+```{r}
+# show each id for different clusters
+cluster_norm2$cluster <- km$cluster
+head(cluster_norm2)
+```
+
+```{r}
+# summarize each cluster
+group<- group_by(cluster_norm2,cluster)
+summarise_all(group,mean)
+```
+
+```{r}
+final_cluster$cluster <- km$cluster
+head(final_cluster)
+```
+
+
+```{r}
+final_cluster %>%
+  group_by(cluster)%>%   
+
+```
+
+
+
+# Analyzing each cluster
+```{r}
+final_cluster$cluster <- km$cluster
+
+c1 <- final_cluster %>% filter(cluster==1)
+summary(c1)
+```
+```{r}
+c2 <- final_cluster %>% filter(cluster==2)
+summary(c2)
+```
+
+```{r}
+c3 <- final_cluster %>% filter(cluster==3)
+summary(c3)
+```
+```{r}
+c4 <- final_cluster %>% filter(cluster==4)
+summary(c4)
+```
+```{r}
+c5 <- final_cluster %>% filter(cluster==5)
+summary(c5)
+```
+
+```{r}
+summarise_all(group,mean)
+```
+
+```{r}
+km$size
+```
+# Description of variable choice:
+Our primary goal is to distance the house host with different features, better describe the host specification and other key point reflect the host business status. Price, amenities_count are used to determine the quality. The high price and amenities level will end up a better house in a normal perspective. Availability_30 and number of reviews are a reflection of customers reaction.
+Host duration and calculated_host_listing count is a feature that describes the host. Min, max nights, bedrooms and accommodation is used to showing the host specification and the size of target customer.
+
+# label each cluster:
+* Standard host looking for short term rental
+* Senior and poplar host
+* luxury house for family&party
+* long-term house rental
+* Standard house
+
+# Summary:
+* Cluster 1(Standard host looking for short term rental):
+Hosts comfortable providing avg 5 days term house rental services. Host prefer to rent rooms, they do not accept a long-term rental. 1/4 of the host fall into this cluster.
+
+* Cluster 2(Senior and popular host): 
+Host have their business on Airbnb for a long time and they are the most popular houses on the market. They hold avg of 30 amenities features in each house. People love to put on a review after booking their house. 
+
+* Cluster 3(luxury house for family&party):
+Houses are big and can contain a large number of people.
+Normally they rent out as a house avg 5 bedrooms for more than 10,000 retail cost. 
+
+* Cluster 4(long-term house rental):
+long host duration host looking for a long term rental(avg 250 days). It is for singles and couples only. Decent features and host only one house available on the platform.
+
+* Cluster 5(Standard house):
+The host has many posts, no special preference but the household fewer features compare with other clusters. 1/2 of the house fall in this cluster.
+
+The clustering model follows the classic 80/20 rule. Cluster2 host owns the most profitable and popular house and it took 20% of the total proportion. We may use this cluster as a standard for all clusters. The data set showed that most of the houses have 20+ availability per month, which will count as waste from an industrial engineering perspective. If we compare the correlation of each variable of the who grouped database and cluster2, we may found more flexibility on night requirement will lead to more reviews and less availability. These three are possible KPI of a successful house rental business.
+
+
+# Final conclusion
+
+
+
+
+
+
